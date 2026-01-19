@@ -431,6 +431,58 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 nargs="+",
                 help="Address and ports of the external engines.",
             )
+
+            # NeMo Gym integration arguments
+            parser.add_argument(
+                "--use-nemo-gym",
+                action="store_true",
+                default=False,
+                help="Enable NeMo Gym environment integration for rollout generation.",
+            )
+            parser.add_argument(
+                "--nemo-gym-config",
+                type=str,
+                default=None,
+                help="Path to NeMo Gym configuration YAML file.",
+            )
+            parser.add_argument(
+                "--nemo-gym-resource-server-url",
+                type=str,
+                default=None,
+                help="NeMo Gym Resource Server URL.",
+            )
+            parser.add_argument(
+                "--nemo-gym-environment",
+                type=str,
+                default=None,
+                help="NeMo Gym environment name to use.",
+            )
+            parser.add_argument(
+                "--nemo-gym-on-policy-fix",
+                action="store_true",
+                default=True,
+                help="Enable on-policy token ID fix for NeMo Gym multi-turn scenarios.",
+            )
+            parser.add_argument(
+                "--unified-rlvr",
+                action="store_true",
+                default=False,
+                help="Enable Unified RLVR training with multiple environments.",
+            )
+            parser.add_argument(
+                "--unified-rlvr-environments",
+                type=str,
+                nargs="+",
+                default=None,
+                help="List of environment names for Unified RLVR.",
+            )
+            parser.add_argument(
+                "--unified-rlvr-weights",
+                type=float,
+                nargs="+",
+                default=None,
+                help="Sampling weights for each Unified RLVR environment.",
+            )
             return parser
 
         def add_fault_tolerance_arguments(parser):

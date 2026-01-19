@@ -1,0 +1,45 @@
+# NeMo Gym Unified RLVR Configuration for Slime
+# This configuration enables multi-environment training with NeMo Gym
+
+nemo_gym:
+  enabled: true
+  
+  # Resource Server connection
+  resource_server_url: "http://localhost:8080"
+  health_check_interval: 30.0
+  timeout_seconds: 300.0
+  max_concurrent_rollouts: 64
+  
+  # Policy model configuration (Slime's SGLang server)
+  policy_model_url: ""  # Leave empty to use Slime's internal server
+  policy_model_name: "slime"
+  
+  # Environments for Unified RLVR
+  # Each environment has a name, config path, and sampling weight
+  environments:
+    - name: "math_with_judge"
+      config: "resources_servers/math_with_judge/configs/bytedtsinghua_dapo17k.yaml"
+      weight: 0.4
+      
+    - name: "coding"
+      config: "resources_servers/coding/configs/coding.yaml"
+      weight: 0.3
+      
+    - name: "instruction_following"
+      config: "resources_servers/if_eval/configs/if_eval.yaml"
+      weight: 0.3
+  
+  # On-policy correction settings
+  on_policy_correction:
+    enabled: true
+    fix_re_tokenization: true
+    fix_re_chat_templating: true
+  
+  # Routing Replay settings (for MoE models)
+  routing_replay:
+    enabled: true
+    backend: "sglang"
+
+# Generation backend configuration
+generation:
+  backend: "sglang"

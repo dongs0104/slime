@@ -39,7 +39,10 @@ setup(
     extras_require={
         "fsdp": [
             "torch>=2.0",
-        ]
+        ],
+        "nemo-gym": [
+            "nemo-gym>=0.1.0",
+        ],
     },
     python_requires=">=3.10",
     classifiers=[
