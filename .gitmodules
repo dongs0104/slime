@@ -1,0 +1,3 @@
+[submodule "3rdparty/nemo-gym"]
+	path = 3rdparty/nemo-gym
+	url = https://github.com/NVIDIA-NeMo/Gym.git
