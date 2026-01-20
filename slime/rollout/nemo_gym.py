@@ -3,6 +3,11 @@ NeMo Gym integration module for Slime.
 
 This module provides the integration layer between Slime and NeMo Gym,
 enabling Unified RLVR training with multiple environments.
+
+The integration follows NeMo Gym's API structure:
+- ServerClient: Connects to head server and manages server discovery
+- Agent servers: Handle rollout collection via /run endpoint
+- Resources servers: Handle verification via /verify endpoint
 """
 
 from __future__ import annotations
@@ -17,7 +22,7 @@ from slime.utils.types import Sample
 
 # Lazy imports for optional dependencies
 if TYPE_CHECKING:
-    import httpx
+    from nemo_gym.server_utils import ServerClient
 
 logger = logging.getLogger(__name__)
 
@@ -26,13 +31,16 @@ logger = logging.getLogger(__name__)
 class NemoGymEnvironmentConfig:
     """Configuration for a single NeMo Gym environment."""
 
-    name: str
-    config_path: str
+    name: str  # Resource server name
+    agent_name: str = ""  # Agent server name (defaults to {name}_simple_agent)
+    config_path: str = ""
     weight: float = 1.0
 
     def __post_init__(self):
         if self.weight < 0:
             raise ValueError(f"Weight must be non-negative, got {self.weight}")
+        if not self.agent_name:
+            self.agent_name = f"{self.name}_simple_agent"
 
 
 @dataclass
@@ -43,14 +51,11 @@ class NemoGymConfig:
     Supports multiple environments for Unified RLVR training.
     """
 
-    resource_server_url: str
+    head_server_host: str = "localhost"
+    head_server_port: int = 11000
     environments: list[NemoGymEnvironmentConfig] = field(default_factory=list)
-    policy_model_url: str = ""
-    policy_model_name: str = "slime"
     max_concurrent_rollouts: int = 64
-    timeout_seconds: float = 300.0
     enable_on_policy_fix: bool = True
-    health_check_interval: float = 30.0
 
     @classmethod
     def from_yaml(cls, path: str) -> "NemoGymConfig":
@@ -68,35 +73,30 @@ class NemoGymConfig:
             environments.append(
                 NemoGymEnvironmentConfig(
                     name=env_data["name"],
-                    config_path=env_data["config"],
+                    agent_name=env_data.get("agent_name", ""),
+                    config_path=env_data.get("config", ""),
                     weight=env_data.get("weight", 1.0),
                 )
             )
 
         return cls(
-            resource_server_url=nemo_gym_data.get("resource_server_url", ""),
+            head_server_host=nemo_gym_data.get("head_server_host", "localhost"),
+            head_server_port=nemo_gym_data.get("head_server_port", 11000),
             environments=environments,
-            policy_model_url=nemo_gym_data.get("policy_model_url", ""),
-            policy_model_name=nemo_gym_data.get("policy_model_name", "slime"),
             max_concurrent_rollouts=nemo_gym_data.get("max_concurrent_rollouts", 64),
-            timeout_seconds=nemo_gym_data.get("timeout_seconds", 300.0),
             enable_on_policy_fix=nemo_gym_data.get("enable_on_policy_fix", True),
-            health_check_interval=nemo_gym_data.get("health_check_interval", 30.0),
         )
 
     @classmethod
     def from_args(cls, args: Namespace) -> "NemoGymConfig":
         """Create configuration from command-line arguments."""
-        if args.nemo_gym_config:
+        if getattr(args, "nemo_gym_config", None):
             config = cls.from_yaml(args.nemo_gym_config)
         else:
             config = cls(
-                resource_server_url=getattr(args, "nemo_gym_resource_server_url", ""),
+                head_server_host=getattr(args, "nemo_gym_head_server_host", "localhost"),
+                head_server_port=getattr(args, "nemo_gym_head_server_port", 11000),
             )
-
-        # Override with command-line arguments
-        if hasattr(args, "nemo_gym_policy_model_url") and args.nemo_gym_policy_model_url:
-            config.policy_model_url = args.nemo_gym_policy_model_url
 
         if hasattr(args, "nemo_gym_on_policy_fix"):
             config.enable_on_policy_fix = args.nemo_gym_on_policy_fix
@@ -105,6 +105,8 @@ class NemoGymConfig:
 
     def get_environment_weights(self) -> dict[str, float]:
         """Get normalized environment weights for sampling."""
+        if not self.environments:
+            return {}
         total = sum(env.weight for env in self.environments)
         if total == 0:
             return {env.name: 1.0 / len(self.environments) for env in self.environments}
@@ -115,38 +117,46 @@ class NemoGymEnvironment:
     """
     NeMo Gym environment wrapper.
 
-    Provides connection to NeMo Gym Resource Server and supports:
-    - Multi-environment rollout collection
-    - Unified RLVR training
-    - On-policy token ID correction
+    Uses NeMo Gym's ServerClient API to:
+    - Connect to head server for service discovery
+    - Call agent servers via /run for rollout collection
+    - Call resources servers via /verify for reward calculation
     """
 
     def __init__(self, config: NemoGymConfig):
         self.config = config
-        self.client: Any = None  # httpx.AsyncClient, lazy loaded
+        self.server_client: Any = None  # ServerClient from nemo_gym
         self.environments: dict[str, dict[str, Any]] = {}
         self._initialized = False
-        self._health_check_task: asyncio.Task | None = None
+        self._semaphore: asyncio.Semaphore | None = None
 
     async def initialize(self) -> None:
-        """Initialize the environment and connect to Resource Server."""
+        """Initialize the environment and connect to NeMo Gym head server."""
         if self._initialized:
             return
 
-        # Lazy import httpx
-        import httpx
+        # Import nemo_gym components
+        from nemo_gym.server_utils import ServerClient
+        from nemo_gym.config_types import BaseServerConfig
 
-        self.client = httpx.AsyncClient(
-            timeout=httpx.Timeout(self.config.timeout_seconds),
-            limits=httpx.Limits(max_connections=self.config.max_concurrent_rollouts),
+        # Create head server config
+        head_server_config = BaseServerConfig(
+            host=self.config.head_server_host,
+            port=self.config.head_server_port,
         )
 
-        # Verify Resource Server connection
-        await self._check_health()
+        # Load server client from head server
+        self.server_client = ServerClient.load_from_global_config(head_server_config)
 
-        # Load all configured environments
+        # Create semaphore for concurrent request control
+        self._semaphore = asyncio.Semaphore(self.config.max_concurrent_rollouts)
+
+        # Register all configured environments
         for env_config in self.config.environments:
-            await self._load_environment(env_config)
+            self.environments[env_config.name] = {
+                "config": env_config,
+                "agent_name": env_config.agent_name,
+            }
 
         self._initialized = True
         logger.info(
@@ -154,25 +164,65 @@ class NemoGymEnvironment:
             f"{list(self.environments.keys())}"
         )
 
-    async def _check_health(self) -> bool:
-        """Check Resource Server health."""
-        if not self.client:
-            return False
+    async def run_agent(
+        self,
+        agent_name: str,
+        request_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Call an agent's /run endpoint for rollout collection.
 
-        try:
-            response = await self.client.get(f"{self.config.resource_server_url}/health")
-            return response.status_code == 200
-        except Exception as e:
-            logger.warning(f"Health check failed: {e}")
-            return False
+        This is the primary method for generating rollouts through NeMo Gym.
 
-    async def _load_environment(self, env_config: NemoGymEnvironmentConfig) -> None:
-        """Load a single environment configuration."""
-        self.environments[env_config.name] = {
-            "config": env_config,
-            "loaded": True,
-        }
-        logger.info(f"Loaded environment: {env_config.name}")
+        Args:
+            agent_name: Name of the agent server to call.
+            request_data: Request payload containing prompt and parameters.
+
+        Returns:
+            Agent response with generation and optional reward.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        from nemo_gym.server_utils import raise_for_status, get_response_json
+
+        async with self._semaphore:
+            response = await self.server_client.post(
+                server_name=agent_name,
+                url_path="/run",
+                json=request_data,
+            )
+            await raise_for_status(response)
+            return await get_response_json(response)
+
+    async def verify(
+        self,
+        resource_server_name: str,
+        response_data: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Call a resource server's /verify endpoint for reward calculation.
+
+        Args:
+            resource_server_name: Name of the resource server.
+            response_data: The response to verify.
+
+        Returns:
+            Verification result including reward.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        from nemo_gym.server_utils import raise_for_status, get_response_json
+
+        async with self._semaphore:
+            response = await self.server_client.post(
+                server_name=resource_server_name,
+                url_path="/verify",
+                json=response_data,
+            )
+            await raise_for_status(response)
+            return await get_response_json(response)
 
     async def collect_rollout(
         self,
@@ -183,11 +233,11 @@ class NemoGymEnvironment:
         Collect rollouts from NeMo Gym environment.
 
         Args:
-            prompts: List of prompt dictionaries in OpenAI format.
-            environment_name: Optional specific environment to use.
+            prompts: List of prompt dictionaries with responses_create_params.
+            environment_name: Specific environment to use.
 
         Returns:
-            List of rollout results with verification scores.
+            List of rollout results with rewards.
         """
         if not self._initialized:
             await self.initialize()
@@ -196,24 +246,27 @@ class NemoGymEnvironment:
         if environment_name is None and self.environments:
             environment_name = list(self.environments.keys())[0]
 
-        # Prepare request payload
-        payload = {
-            "prompts": prompts,
-            "environment": environment_name,
-            "policy_model_url": self.config.policy_model_url,
-            "policy_model_name": self.config.policy_model_name,
-        }
+        env_info = self.environments.get(environment_name, {})
+        agent_name = env_info.get("agent_name", f"{environment_name}_simple_agent")
 
-        try:
-            response = await self.client.post(
-                f"{self.config.resource_server_url}/collect_rollouts",
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Rollout collection failed: {e}")
-            raise
+        # Collect rollouts in parallel
+        tasks = []
+        for prompt in prompts:
+            # Format request for NeMo Gym agent
+            request_data = self._format_agent_request(prompt, environment_name)
+            tasks.append(self.run_agent(agent_name, request_data))
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Filter out exceptions and log them
+        valid_results = []
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                logger.error(f"Rollout {i} failed: {result}")
+            else:
+                valid_results.append(result)
+
+        return valid_results
 
     async def collect_unified_rollouts(
         self,
@@ -252,53 +305,31 @@ class NemoGymEnvironment:
 
         return results
 
-    async def get_verification_result(
+    def _format_agent_request(
         self,
-        rollout: dict[str, Any],
+        prompt: dict[str, Any],
         environment_name: str | None = None,
     ) -> dict[str, Any]:
-        """
-        Get verification result and reward for a rollout.
+        """Format a prompt for NeMo Gym agent request."""
+        # NeMo Gym expects responses_create_params with messages
+        if "responses_create_params" not in prompt:
+            prompt = {
+                "responses_create_params": {
+                    "messages": prompt.get("messages", []),
+                    **{k: v for k, v in prompt.items() if k != "messages"},
+                }
+            }
 
-        Args:
-            rollout: The rollout data to verify.
-            environment_name: Optional specific environment for verification.
+        # Add environment reference if specified
+        if environment_name:
+            prompt["resource_ref"] = {"name": environment_name}
 
-        Returns:
-            Dictionary with verification result and reward.
-        """
-        if not self._initialized:
-            await self.initialize()
-
-        payload = {
-            "rollout": rollout,
-            "environment": environment_name,
-        }
-
-        try:
-            response = await self.client.post(
-                f"{self.config.resource_server_url}/verify",
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
-        except Exception as e:
-            logger.error(f"Verification failed: {e}")
-            raise
+        return prompt
 
     async def shutdown(self) -> None:
         """Clean up resources."""
-        if self._health_check_task:
-            self._health_check_task.cancel()
-            try:
-                await self._health_check_task
-            except asyncio.CancelledError:
-                pass
-
-        if self.client:
-            await self.client.aclose()
-
         self._initialized = False
+        self.server_client = None
         logger.info("NeMo Gym environment shut down")
 
 
@@ -316,43 +347,45 @@ def create_nemo_gym_environment(args: Namespace) -> NemoGymEnvironment:
     return NemoGymEnvironment(config)
 
 
-def sample_to_openai_format(sample: Sample) -> dict[str, Any]:
+def sample_to_nemo_gym_request(sample: Sample) -> dict[str, Any]:
     """
-    Convert a Slime Sample to OpenAI API format.
+    Convert a Slime Sample to NeMo Gym request format.
 
     Args:
         sample: Slime Sample object.
 
     Returns:
-        Dictionary in OpenAI chat completion format.
+        Dictionary in NeMo Gym agent request format.
     """
     messages = []
 
-    # Parse prompt if it's a string (may contain chat history)
+    # Parse prompt
     if isinstance(sample.prompt, str):
         messages.append({"role": "user", "content": sample.prompt})
     elif isinstance(sample.prompt, list):
-        messages = sample.prompt
+        messages = list(sample.prompt)
 
-    # Add response if available
+    # Add response if available (for verification)
     if sample.response:
         messages.append({"role": "assistant", "content": sample.response})
 
     return {
-        "messages": messages,
+        "responses_create_params": {
+            "messages": messages,
+        },
         "metadata": sample.metadata or {},
     }
 
 
-def openai_response_to_sample(
+def nemo_gym_response_to_sample(
     response: dict[str, Any],
     original_sample: Sample,
 ) -> Sample:
     """
-    Convert an OpenAI API response back to a Slime Sample.
+    Convert a NeMo Gym response back to a Slime Sample.
 
     Args:
-        response: OpenAI API response dictionary.
+        response: NeMo Gym agent response dictionary.
         original_sample: Original sample to update.
 
     Returns:
@@ -360,19 +393,22 @@ def openai_response_to_sample(
     """
     sample = original_sample
 
-    # Extract response text
-    if "choices" in response:
-        choice = response["choices"][0]
-        if "message" in choice:
-            sample.response = choice["message"].get("content", "")
-        elif "text" in choice:
-            sample.response = choice["text"]
+    # Extract response from NeMo Gym format
+    if "response" in response:
+        nemo_response = response["response"]
+        if "output" in nemo_response:
+            # Extract last assistant message
+            output = nemo_response["output"]
+            if isinstance(output, list) and output:
+                last_msg = output[-1]
+                if isinstance(last_msg, dict) and "content" in last_msg:
+                    sample.response = last_msg["content"]
+            elif isinstance(output, str):
+                sample.response = output
 
-    # Extract reward/verification if available
+    # Extract reward
     if "reward" in response:
         sample.reward = response["reward"]
-    elif "verification" in response:
-        sample.reward = response["verification"].get("score", 0.0)
 
     # Update metadata
     if "metadata" in response:

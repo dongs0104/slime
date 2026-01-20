@@ -10,8 +10,8 @@ from slime.rollout.nemo_gym import (
     NemoGymConfig,
     NemoGymEnvironmentConfig,
     NemoGymEnvironment,
-    sample_to_openai_format,
-    openai_response_to_sample,
+    sample_to_nemo_gym_request,
+    nemo_gym_response_to_sample,
 )
 from slime.training.unified_rlvr import (
     UnifiedRLVRConfig,
@@ -27,41 +27,51 @@ class TestNemoGymConfig:
     def test_environment_config_creation(self):
         """Test creating an environment config."""
         config = NemoGymEnvironmentConfig(
-            name="math",
-            config_path="/path/to/config.yaml",
+            name="math_with_judge",
+            agent_name="math_with_judge_simple_agent",
             weight=0.5,
         )
-        assert config.name == "math"
+        assert config.name == "math_with_judge"
+        assert config.agent_name == "math_with_judge_simple_agent"
         assert config.weight == 0.5
+
+    def test_environment_config_default_agent_name(self):
+        """Test that agent_name defaults to {name}_simple_agent."""
+        config = NemoGymEnvironmentConfig(
+            name="coding",
+        )
+        assert config.agent_name == "coding_simple_agent"
 
     def test_environment_config_negative_weight_raises(self):
         """Test that negative weights raise an error."""
         with pytest.raises(ValueError):
             NemoGymEnvironmentConfig(
                 name="math",
-                config_path="/path/to/config.yaml",
                 weight=-0.5,
             )
 
     def test_nemo_gym_config_creation(self):
         """Test creating a NemoGymConfig."""
         config = NemoGymConfig(
-            resource_server_url="http://localhost:8080",
+            head_server_host="localhost",
+            head_server_port=11000,
             environments=[
-                NemoGymEnvironmentConfig("math", "/path/math.yaml", 0.5),
-                NemoGymEnvironmentConfig("coding", "/path/coding.yaml", 0.5),
+                NemoGymEnvironmentConfig("math", agent_name="math_agent", weight=0.5),
+                NemoGymEnvironmentConfig("coding", agent_name="coding_agent", weight=0.5),
             ],
         )
-        assert config.resource_server_url == "http://localhost:8080"
+        assert config.head_server_host == "localhost"
+        assert config.head_server_port == 11000
         assert len(config.environments) == 2
 
     def test_get_environment_weights(self):
         """Test getting normalized environment weights."""
         config = NemoGymConfig(
-            resource_server_url="http://localhost:8080",
+            head_server_host="localhost",
+            head_server_port=11000,
             environments=[
-                NemoGymEnvironmentConfig("math", "/path/math.yaml", 0.4),
-                NemoGymEnvironmentConfig("coding", "/path/coding.yaml", 0.6),
+                NemoGymEnvironmentConfig("math", weight=0.4),
+                NemoGymEnvironmentConfig("coding", weight=0.6),
             ],
         )
         weights = config.get_environment_weights()
@@ -72,43 +82,45 @@ class TestNemoGymConfig:
         """Test creating config from args."""
         args = Namespace(
             nemo_gym_config=None,
-            nemo_gym_resource_server_url="http://localhost:9000",
-            nemo_gym_policy_model_url="http://localhost:30000",
+            nemo_gym_head_server_host="192.168.1.1",
+            nemo_gym_head_server_port=12000,
             nemo_gym_on_policy_fix=True,
         )
         config = NemoGymConfig.from_args(args)
-        assert config.resource_server_url == "http://localhost:9000"
-        assert config.policy_model_url == "http://localhost:30000"
+        assert config.head_server_host == "192.168.1.1"
+        assert config.head_server_port == 12000
 
 
 class TestSampleConversion:
     """Tests for sample conversion utilities."""
 
-    def test_sample_to_openai_format(self):
-        """Test converting sample to OpenAI format."""
+    def test_sample_to_nemo_gym_request(self):
+        """Test converting sample to NeMo Gym request format."""
         sample = Sample(
             prompt="Hello, how are you?",
             response="I'm doing well, thank you!",
             metadata={"key": "value"},
         )
-        result = sample_to_openai_format(sample)
+        result = sample_to_nemo_gym_request(sample)
         
-        assert "messages" in result
-        assert len(result["messages"]) == 2
-        assert result["messages"][0]["role"] == "user"
-        assert result["messages"][1]["role"] == "assistant"
+        assert "responses_create_params" in result
+        assert "messages" in result["responses_create_params"]
+        messages = result["responses_create_params"]["messages"]
+        assert len(messages) == 2
+        assert messages[0]["role"] == "user"
+        assert messages[1]["role"] == "assistant"
 
-    def test_openai_response_to_sample(self):
-        """Test converting OpenAI response back to sample."""
+    def test_nemo_gym_response_to_sample(self):
+        """Test converting NeMo Gym response back to sample."""
         original = Sample(prompt="Hello")
         response = {
-            "choices": [
-                {"message": {"content": "Hi there!"}}
-            ],
+            "response": {
+                "output": [{"role": "assistant", "content": "Hi there!"}]
+            },
             "reward": 1.0,
         }
         
-        result = openai_response_to_sample(response, original)
+        result = nemo_gym_response_to_sample(response, original)
         assert result.response == "Hi there!"
         assert result.reward == 1.0
 

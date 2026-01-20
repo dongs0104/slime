@@ -17,8 +17,8 @@ from slime.rollout.nemo_gym import (
     NemoGymConfig,
     NemoGymEnvironment,
     create_nemo_gym_environment,
-    sample_to_openai_format,
-    openai_response_to_sample,
+    sample_to_nemo_gym_request,
+    nemo_gym_response_to_sample,
 )
 from slime.utils.async_utils import run
 from slime.utils.types import Sample
@@ -43,7 +43,6 @@ class NemoGymRolloutState:
 
         self.args = args
         self.environment: NemoGymEnvironment | None = None
-        self.semaphore: asyncio.Semaphore | None = None
         self._initialized = True
 
     async def initialize(self) -> None:
@@ -51,10 +50,6 @@ class NemoGymRolloutState:
         if self.environment is None:
             self.environment = create_nemo_gym_environment(self.args)
             await self.environment.initialize()
-
-            # Create semaphore for concurrent rollout control
-            max_concurrent = self.environment.config.max_concurrent_rollouts
-            self.semaphore = asyncio.Semaphore(max_concurrent)
 
     async def shutdown(self) -> None:
         """Shutdown the NeMo Gym environment."""
@@ -82,29 +77,19 @@ async def generate_nemo_gym_sample(
     state = NemoGymRolloutState(args)
     await state.initialize()
 
-    async with state.semaphore:
-        # Convert sample to OpenAI format
-        prompt = sample_to_openai_format(sample)
+    # Convert sample to NeMo Gym request format
+    request_data = sample_to_nemo_gym_request(sample)
 
-        # Collect rollout from NeMo Gym
-        results = await state.environment.collect_rollout(
-            prompts=[prompt],
-            environment_name=environment_name,
-        )
+    # Collect rollout from NeMo Gym
+    results = await state.environment.collect_rollout(
+        prompts=[request_data],
+        environment_name=environment_name,
+    )
 
-        if results:
-            # Convert response back to sample
-            sample = openai_response_to_sample(results[0], sample)
-
-            # Get verification result if not included
-            if sample.reward is None:
-                verification = await state.environment.get_verification_result(
-                    results[0],
-                    environment_name=environment_name,
-                )
-                sample.reward = verification.get("reward", 0.0)
-
-            sample.status = Sample.Status.COMPLETED
+    if results:
+        # Convert response back to sample
+        sample = nemo_gym_response_to_sample(results[0], sample)
+        sample.status = Sample.Status.COMPLETED
 
     return sample
 
