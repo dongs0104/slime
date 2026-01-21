@@ -780,7 +780,13 @@ def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     all_sample_groups = group_by(all_samples, lambda s: s.group_index)
     interesting_sample_groups = [g for g in all_sample_groups.values() if _is_zero_std(g)]
 
-    interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
+    def _get_reward_str(sample):
+        reward = sample.get_reward_value(args)
+        if reward is None:
+            return "None"
+        return str(round(reward, 1))
+
+    interesting_rewards = [_get_reward_str(g[0]) for g in interesting_sample_groups]
 
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
