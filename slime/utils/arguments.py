@@ -464,6 +464,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Enable on-policy token ID fix for NeMo Gym multi-turn scenarios.",
             )
             parser.add_argument(
+                "--nemo-gym-auto-start",
+                action="store_true",
+                default=False,
+                help="Automatically start NeMo Gym servers from config (like ng_run).",
+            )
+            parser.add_argument(
                 "--unified-rlvr",
                 action="store_true",
                 default=False,

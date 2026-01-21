@@ -8,6 +8,13 @@ nemo_gym:
   head_server_host: "localhost"
   head_server_port: 11000
   
+  # Auto-start NeMo Gym servers (like ng_run)
+  auto_start_servers: true
+  
+  # Config paths for ng_run (relative to 3rdparty/nemo-gym)
+  config_paths:
+    - "resources_servers/math_with_judge/configs/bytedtsinghua_dapo17k.yaml"
+  
   max_concurrent_rollouts: 64
   
   # Environments for Unified RLVR
