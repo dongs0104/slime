@@ -17,23 +17,31 @@ nemo_gym:
   
   max_concurrent_rollouts: 64
   
+  # Use NeMo Gym environment data instead of Slime data source
+  use_env_data: true
+  
   # Environments for Unified RLVR
-  # Each environment specifies resource server and agent names
+  # Each environment specifies resource server, agent, and data source
   environments:
     - name: "math_with_judge"  # Resource server name
       agent_name: "math_with_judge_simple_agent"  # Agent server name
       config: "resources_servers/math_with_judge/configs/bytedtsinghua_dapo17k.yaml"
-      weight: 0.4
+      # Data source (relative to 3rdparty/nemo-gym)
+      jsonl_fpath: "resources_servers/math_with_judge/data/dapo17k_bytedtsinghua_train.jsonl"
+      weight: 1.0
       
-    - name: "coding"
-      agent_name: "coding_simple_agent"
-      config: "resources_servers/coding/configs/coding.yaml"
-      weight: 0.3
-      
-    - name: "instruction_following"
-      agent_name: "if_eval_simple_agent"
-      config: "resources_servers/if_eval/configs/if_eval.yaml"
-      weight: 0.3
+    # Example: Add more environments for true Unified RLVR
+    # - name: "coding"
+    #   agent_name: "coding_simple_agent"
+    #   config: "resources_servers/coding/configs/coding.yaml"
+    #   jsonl_fpath: "resources_servers/coding/data/coding_train.jsonl"
+    #   weight: 0.3
+    #   
+    # - name: "instruction_following"
+    #   agent_name: "if_eval_simple_agent"
+    #   config: "resources_servers/if_eval/configs/if_eval.yaml"
+    #   jsonl_fpath: "resources_servers/if_eval/data/if_eval_train.jsonl"
+    #   weight: 0.3
   
   # On-policy correction settings
   on_policy_correction:

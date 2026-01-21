@@ -35,6 +35,7 @@ class NemoGymEnvironmentConfig:
     name: str  # Resource server name
     agent_name: str = ""  # Agent server name (defaults to {name}_simple_agent)
     config_path: str = ""  # NeMo Gym YAML config path (for ng_run)
+    jsonl_fpath: str = ""  # Data source JSONL file path (relative to nemo-gym root)
     weight: float = 1.0
 
     def __post_init__(self):
@@ -80,6 +81,7 @@ class NemoGymConfig:
                     name=env_data["name"],
                     agent_name=env_data.get("agent_name", ""),
                     config_path=env_data.get("config", ""),
+                    jsonl_fpath=env_data.get("jsonl_fpath", ""),
                     weight=env_data.get("weight", 1.0),
                 )
             )
@@ -132,6 +134,52 @@ class NemoGymConfig:
             return self.config_paths
         # Collect from environments
         return [env.config_path for env in self.environments if env.config_path]
+
+    def load_environment_data(self, nemo_gym_root: str | None = None) -> dict[str, list[dict]]:
+        """
+        Load data from each environment's jsonl file.
+        
+        Args:
+            nemo_gym_root: Root directory of NeMo Gym (default: 3rdparty/nemo-gym).
+        
+        Returns:
+            Dictionary mapping environment name to list of data rows.
+        """
+        import json
+        from pathlib import Path
+        
+        if nemo_gym_root is None:
+            # Default to 3rdparty/nemo-gym relative to slime root
+            import os
+            slime_root = Path(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+            nemo_gym_root = slime_root / "3rdparty" / "nemo-gym"
+        else:
+            nemo_gym_root = Path(nemo_gym_root)
+        
+        env_data = {}
+        
+        for env_config in self.environments:
+            if not env_config.jsonl_fpath:
+                logger.warning(
+                    f"Environment '{env_config.name}' has no jsonl_fpath, "
+                    "will use Slime data source for this environment"
+                )
+                continue
+            
+            jsonl_path = nemo_gym_root / env_config.jsonl_fpath
+            
+            if not jsonl_path.exists():
+                raise FileNotFoundError(
+                    f"Data file not found for environment '{env_config.name}': {jsonl_path}"
+                )
+            
+            with open(jsonl_path) as f:
+                rows = [json.loads(line) for line in f]
+            
+            logger.info(f"Loaded {len(rows)} samples for environment '{env_config.name}'")
+            env_data[env_config.name] = rows
+        
+        return env_data
 
 
 class NemoGymServerManager:
