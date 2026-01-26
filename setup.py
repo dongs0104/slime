@@ -39,7 +39,9 @@ setup(
     extras_require={
         "fsdp": [
             "torch>=2.0",
-        ]
+        ],
+        # nemo-gym is now available as a git submodule in 3rdparty/nemo-gym
+        # To install: pip install -e 3rdparty/nemo-gym
     },
     python_requires=">=3.10",
     classifiers=[

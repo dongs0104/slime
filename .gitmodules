@@ -1,0 +1,6 @@
+[submodule "3rdparty/nemo-gym"]
+	path = 3rdparty/nemo-gym
+	url = https://github.com/NVIDIA-NeMo/Gym.git
+[submodule "3rdparty/Megatron-LM"]
+	path = 3rdparty/Megatron-LM
+	url = https://github.com/NVIDIA/Megatron-LM.git
